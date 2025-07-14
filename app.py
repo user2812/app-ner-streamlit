@@ -1,21 +1,20 @@
 import streamlit as st
 from transformers import pipeline
 import pandas as pd
+import fitz  # PyMuPDF pour lire les PDF
 
-# 🎨 Couleurs HTML par type d'entité
-COLORS = {
-    "PER": "#ffe599",  # jaune clair
-    "LOC": "#b6d7a8",  # vert menthe
-    "ORG": "#9fc5e8",  # bleu doux
-    "MISC": "#f9cb9c"  # rose pêche
-}
-
-# 🚀 Charger un pipeline avec cache
+# 🔁 Chargement des deux modèles
 @st.cache_resource
 def load_pipeline(model_name):
     return pipeline("ner", model=model_name, aggregation_strategy="simple")
 
-# 🎨 Mise en évidence HTML des entités dans le texte
+ner_camembert = load_pipeline("Jean-Baptiste/camembert-ner")
+ner_mbert = load_pipeline("Davlan/bert-base-multilingual-cased-ner-hrl")
+
+# 🎨 Couleurs HTML pour chaque type d'entité
+COLORS = {"PER": "#ffe599", "LOC": "#b6d7a8", "ORG": "#9fc5e8", "MISC": "#f9cb9c"}
+
+# 📌 Mise en surbrillance HTML
 def highlight_entities(text, entities):
     offset = 0
     for ent in sorted(entities, key=lambda x: x["start"]):
@@ -28,7 +27,7 @@ def highlight_entities(text, entities):
         offset += len(span) - (end - start)
     return text
 
-# 🌑 Mode sombre (CSS injecté)
+# 🌙 Style personnalisé (mode sombre)
 st.markdown("""
     <style>
     body { background-color: #1e1e1e; color: white; }
@@ -39,41 +38,71 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# 🧠 Interface principale
-st.title("🧠 NER interactif en français")
-st.markdown("Détecte automatiquement les **entités nommées** comme les **personnes**, **lieux**, **organisations**, etc.")
+# 🧠 Interface
+st.title("🧠 NER interactif : CamemBERT vs mBERT")
+st.markdown("Analyse de texte pour détecter les entités nommées (personnes, lieux, organisations...).")
 
-# 🧪 Sélecteur de modèle
-model_choice = st.selectbox("Modèle à utiliser :", [
-    "Jean-Baptiste/camembert-ner", 
-    "Davlan/bert-base-multilingual-cased-ner-hrl"
-], format_func=lambda x: "CamemBERT (français)" if "camembert" in x else "mBERT (multilingue)")
+# 📂 Upload de fichier
+uploaded_file = st.file_uploader("📂 Charger un fichier .txt ou .pdf", type=["txt", "pdf"])
+texte = ""
 
-ner = load_pipeline(model_choice)
+if uploaded_file:
+    if uploaded_file.type == "application/pdf":
+        doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+        texte = " ".join(page.get_text() for page in doc)
+    else:
+        texte = uploaded_file.read().decode("utf-8")
+else:
+    texte = st.text_area("✍️ Ou saisir un texte :", height=200, value="Emmanuel Macron a rencontré le président de l’ONU à Paris.")
 
-# 📝 Zone de texte
-text = st.text_area("Texte à analyser", height=200, value="Emmanuel Macron a rencontré le président de l’ONU à Paris en 2023.")
+# 🕓 Historique des textes analysés
+if "history" not in st.session_state:
+    st.session_state.history = []
 
 # ▶️ Analyse du texte
-if st.button("Analyser les entités") and text.strip():
-    with st.spinner("Extraction en cours..."):
-        entities = ner(text)
-        highlighted = highlight_entities(text, entities)
+if st.button("Analyser avec CamemBERT et mBERT") and texte.strip():
+    with st.spinner("🔍 Analyse en cours..."):
+        ent1 = ner_camembert(texte)
+        ent2 = ner_mbert(texte)
 
-        # 🖼️ Texte annoté
-        st.markdown("### 📝 Texte annoté :", unsafe_allow_html=True)
-        st.markdown(highlighted, unsafe_allow_html=True)
+        # Sauvegarde dans l'historique
+        st.session_state.history.append({
+            "texte": texte,
+            "camembert": ent1,
+            "mbert": ent2
+        })
 
-        # 📋 Affichage tabulaire
-        if entities:
-            df = pd.DataFrame(entities)
-            df = df[["word", "entity_group", "score"]]
-            df.columns = ["Texte", "Type d'entité", "Confiance"]
-            st.markdown("### 📊 Entités détectées :")
-            st.dataframe(df)
+        # 🔎 Visualisation annotée
+        st.subheader("📝 Texte annoté (CamemBERT)")
+        st.markdown(highlight_entities(texte, ent1), unsafe_allow_html=True)
 
-            # 💾 Télécharger en CSV
-            csv = df.to_csv(index=False).encode("utf-8")
-            st.download_button("📥 Télécharger les entités (CSV)", csv, "entites.csv", "text/csv")
-        else:
-            st.warning("Aucune entité détectée.")
+        st.subheader("📝 Texte annoté (mBERT)")
+        st.markdown(highlight_entities(texte, ent2), unsafe_allow_html=True)
+
+        # 📊 Résultats tabulaires
+        df1 = pd.DataFrame(ent1)[["word", "entity_group", "score"]].rename(columns={
+            "word": "Texte", "entity_group": "Type d'entité", "score": "Confiance"})
+        df2 = pd.DataFrame(ent2)[["word", "entity_group", "score"]].rename(columns={
+            "word": "Texte", "entity_group": "Type d'entité", "score": "Confiance"})
+
+        st.markdown("### 📊 Résultats CamemBERT")
+        st.dataframe(df1)
+
+        st.markdown("### 📊 Résultats mBERT")
+        st.dataframe(df2)
+
+        # 📥 Télécharger les résultats combinés
+        df1["Modèle"] = "CamemBERT"
+        df2["Modèle"] = "mBERT"
+        df_all = pd.concat([df1, df2], ignore_index=True)
+        csv = df_all.to_csv(index=False).encode("utf-8")
+        st.download_button("📥 Télécharger les résultats (CSV)", csv, "entites_comparées.csv", "text/csv")
+
+# 🕓 Historique affiché en bas
+if st.session_state.history:
+    with st.expander("🕓 Voir l'historique des analyses de cette session"):
+        for i, item in enumerate(reversed(st.session_state.history), 1):
+            st.markdown(f"**Texte #{i}** : `{item['texte'][:100]}...`")
+            st.markdown("Entités CamemBERT : " + ", ".join([e['word'] for e in item["camembert"]]))
+            st.markdown("Entités mBERT : " + ", ".join([e['word'] for e in item["mbert"]]))
+            st.markdown("---")
