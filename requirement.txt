@@ -1,9 +1,5 @@
-streamlit
-transformers
-datasets
-torch
+streamlit>=1.25.0
+transformers>=4.40.0
+torch>=2.0.0
 pandas
-numpy
-scikit-learn
-matplotlib
-
+PyMuPDF  # pour lire les fichiers PDF
